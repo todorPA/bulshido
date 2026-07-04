@@ -66,6 +66,19 @@
   .tools button.danger{color:var(--accent); border-color:var(--accent-soft);}
   .foot{font-size:11.5px; color:var(--muted); text-align:center; margin-top:20px;}
   .hidden{display:none;}
+  .bwrow{display:flex; gap:8px; align-items:center; margin-top:4px; flex-wrap:wrap;}
+  .bwrow input[type=date]{border:1px solid var(--line); border-radius:8px; padding:7px 8px; font-size:13px;}
+  .bwrow input[type=number]{width:90px; border:1px solid var(--line); border-radius:8px; padding:7px 8px; font-size:13px;}
+  .bwrow button{border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer;}
+  .chart{width:100%; height:auto; display:block; margin-top:8px;}
+  .chart-empty{font-size:12.5px; color:var(--muted); font-style:italic; padding:14px 0; text-align:center;}
+  .liftpick{display:flex; gap:6px; flex-wrap:wrap; margin:2px 0 4px;}
+  .liftpick button{border:1px solid var(--line); background:#fff; border-radius:20px; padding:5px 12px; font-size:12px; cursor:pointer; color:var(--ink);}
+  .liftpick button.active{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .bwlist{font-size:12px; color:var(--muted); margin-top:6px; max-height:96px; overflow:auto;}
+  .bwlist span{display:inline-block; margin:2px 6px 2px 0; padding:2px 8px; background:var(--band); border-radius:12px;}
+  .bwlist span b{color:var(--ink);}
+  .bwlist span a{color:var(--accent); text-decoration:none; margin-left:5px; cursor:pointer; font-weight:700;}
 </style>
 </head>
 <body>
@@ -86,6 +99,24 @@
   <div id="daysContainer"></div>
 
   <div class="bar">
+    <h3>Bodyweight trend</h3>
+    <div class="bwrow">
+      <input type="date" id="bwDate">
+      <input type="number" id="bwVal" step="0.1" placeholder="kg" inputmode="decimal">
+      <button onclick="logBW()">Log</button>
+    </div>
+    <div id="bwChart"></div>
+    <div class="bwlist" id="bwList"></div>
+  </div>
+
+  <div class="bar">
+    <h3>Estimated 1RM progression</h3>
+    <div class="progress-label">Calculated from your logged top-set reps (Epley formula). Log AMRAP reps above to fill this in.</div>
+    <div class="liftpick" id="liftPick"></div>
+    <div id="e1rmChart"></div>
+  </div>
+
+  <div class="bar">
     <h3>Data</h3>
     <div class="progress-label">Your logs are saved in this browser (localStorage). Export a backup any time.</div>
     <div class="tools">
@@ -96,7 +127,7 @@
     </div>
   </div>
 
-  <div class="foot">Weights in kg · AMRAP sets show target reps — type what you actually hit.<br>Made for Sunčica · runs fully offline once loaded.</div>
+  <div class="foot">Weights in kg · AMRAP sets show target reps — type what you actually hit.<br>Made for Todor · runs fully offline once loaded.</div>
 </div>
 
 <script>
@@ -143,7 +174,7 @@ const EXTRAS = [
 ];
 
 /* ---------- STATE ---------- */
-const KEY = "todor_531_tracker_v1";
+const KEY = "suncica_531_tracker_v1";
 let state = load();
 function load(){ try{return JSON.parse(localStorage.getItem(KEY))||{};}catch(e){return {};} }
 function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
@@ -210,11 +241,89 @@ function renderDays(){
       onchange="toggleExtra(${currentWeek},'${e.id}',this.checked)"> ${e.label}</label>`).join("");
   c.appendChild(ex);
 }
-function render(){ renderNav(); renderDays(); renderProgress(); }
+function render(){ renderNav(); renderDays(); renderProgress(); renderBW(); renderE1RM(); }
+
+/* ---------- BODYWEIGHT ---------- */
+function bwData(){ return state.bw || (state.bw=[]); }
+function logBW(){
+  const d=document.getElementById("bwDate").value;
+  const v=parseFloat(document.getElementById("bwVal").value);
+  if(!d||isNaN(v)){ alert("Pick a date and enter a weight."); return; }
+  const arr=bwData().filter(e=>e.date!==d);   // one entry per date
+  arr.push({date:d, kg:v});
+  arr.sort((a,b)=>a.date<b.date?-1:1);
+  state.bw=arr; save();
+  document.getElementById("bwVal").value="";
+  renderBW();
+}
+function delBW(date){ state.bw=bwData().filter(e=>e.date!==date); save(); renderBW(); }
+function renderBW(){
+  const arr=bwData();
+  const list=document.getElementById("bwList");
+  list.innerHTML=arr.map(e=>`<span><b>${e.kg}kg</b> ${e.date.slice(5)}<a onclick="delBW('${e.date}')">×</a></span>`).join("")||"";
+  const pts=arr.map(e=>({x:e.date, y:e.kg}));
+  document.getElementById("bwChart").innerHTML=lineChart(pts,"kg","#b02a37");
+}
+
+/* ---------- ESTIMATED 1RM ---------- */
+let e1rmLift = "squat";
+function topWeight(week,lift){                 // parse "107.5×1+" -> 107.5
+  const s=LIFTS[lift][week][2]; return parseFloat(s.split("×")[0]);
+}
+function epley(w,reps){ return w*(1+reps/30); }
+function e1rmSeries(lift){
+  // for each week 1..8, if an AMRAP rep is logged on the day that trains this lift, compute e1RM
+  const dayFor={squat:"A",bench:"B",ohp:"B",deadlift:"C"};
+  const day=dayFor[lift];
+  const pts=[];
+  for(let w=1;w<=8;w++){
+    const reps=parseInt(state[ak(w,day,lift)]);
+    if(!isNaN(reps)&&reps>0){
+      pts.push({x:"Wk "+w, y:Math.round(epley(topWeight(w,lift),reps)*10)/10});
+    }
+  }
+  return pts;
+}
+function renderE1RM(){
+  const pick=document.getElementById("liftPick");
+  const order=[["squat","Squat"],["bench","Bench"],["deadlift","Deadlift"],["ohp","OHP"]];
+  pick.innerHTML=order.map(([k,n])=>`<button class="${k===e1rmLift?'active':''}" onclick="e1rmLift='${k}';renderE1RM();">${n}</button>`).join("");
+  document.getElementById("e1rmChart").innerHTML=lineChart(e1rmSeries(e1rmLift),"kg","#2a5f9e");
+}
+
+/* ---------- MINI SVG LINE CHART (no libraries) ---------- */
+function lineChart(pts, unit, color){
+  if(!pts.length) return `<div class="chart-empty">No data yet — log some entries to see the trend.</div>`;
+  const W=760,H=220,pad=38;
+  const ys=pts.map(p=>p.y);
+  let min=Math.min(...ys), max=Math.max(...ys);
+  if(min===max){ min-=2; max+=2; } else { const m=(max-min)*0.15; min-=m; max+=m; }
+  const n=pts.length;
+  const X=i=> n===1 ? W/2 : pad + i*(W-2*pad)/(n-1);
+  const Y=v=> H-pad - (v-min)/(max-min)*(H-2*pad);
+  // gridlines + y labels (3)
+  let grid="";
+  for(let g=0;g<=2;g++){
+    const val=min+(max-min)*g/2, yy=Y(val);
+    grid+=`<line x1="${pad}" y1="${yy}" x2="${W-pad}" y2="${yy}" stroke="#eee"/>`;
+    grid+=`<text x="${pad-6}" y="${yy+4}" text-anchor="end" font-size="11" fill="#999">${Math.round(val*10)/10}</text>`;
+  }
+  const line=pts.map((p,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+  const area=`M${X(0).toFixed(1)},${H-pad} `+pts.map((p,i)=>`L${X(i).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ")+` L${X(n-1).toFixed(1)},${H-pad} Z`;
+  const dots=pts.map((p,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="3.5" fill="${color}"/>
+     <text x="${X(i).toFixed(1)}" y="${(Y(p.y)-9).toFixed(1)}" text-anchor="middle" font-size="10.5" fill="${color}" font-weight="700">${p.y}</text>`).join("");
+  const xlabs=pts.map((p,i)=>`<text x="${X(i).toFixed(1)}" y="${H-pad+16}" text-anchor="middle" font-size="10.5" fill="#999">${p.x}</text>`).join("");
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${grid}
+    <path d="${area}" fill="${color}" opacity="0.08"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round"/>
+    ${dots}${xlabs}
+  </svg>`;
+}
 
 /* ---------- ACTIONS ---------- */
 function toggleDone(w,d){ state[sk(w,d)]=!state[sk(w,d)]; save(); render(); }
-function setAmrap(w,d,lift,v){ state[ak(w,d,lift)]=v.trim(); save(); }
+function setAmrap(w,d,lift,v){ state[ak(w,d,lift)]=v.trim(); save(); renderE1RM(); }
 function toggleExtra(w,e,v){ state[ek(w,e)]=v; save(); renderNav(); }
 
 function exportData(){
@@ -231,6 +340,7 @@ function importData(ev){
 }
 function resetAll(){ if(confirm("Erase all logged progress? This cannot be undone.")){ state={}; save(); currentWeek=1; render(); } }
 
+document.getElementById("bwDate").valueAsDate = new Date();
 render();
 </script>
 </body>
